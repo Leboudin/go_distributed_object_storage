@@ -19,6 +19,30 @@ go run ./main.go  -address=:8030 -dps=:8031 server
 go run ./main.go -storage=/var/www/godos -address=:8031 dataserver
 ```
 
+After the two services are up and running, you can store/retrieve objects like below (in Python):
+
+```python
+import requests
+import datetime
+import os
+import requests
+
+# test put object
+with open('./test.txt', 'w') as fp:
+    ts = datetime.datetime.now().strftime('%Y-%m-%d-%H-%M-%S')
+    content = 'This is a test file, created at: {}'.format(ts)
+    fp.write(content)
+
+with open('./test.txt', 'rb') as fp:
+    object_name = 'obj-{}'.format(ts)
+    api = 'http://{}/objects/{}'.format(addr, object_name)
+    resp = requests.put(api, data=fp)
+
+
+# test get object
+resp = requests.get(api)
+```
+
 To see help message, you can use the following command:
 
 `go run ./main.go -h`

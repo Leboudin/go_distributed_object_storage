@@ -110,21 +110,106 @@ func consumeMessage(svc *sqs.SQS) {
 	}
 }
 
+type SQS struct {
+	// Queue url
+	url string
+
+	// AWS SQS service client
+	svc *sqs.SQS
+
+	// Message channel
+	msgC chan sqs.Message
+
+	// Close channel, used to close connection
+	closeC chan bool
+}
+
+func NewSQS(name string) *SQS {
+	svc := newServiceClient()
+	url := getQueueUrl(svc)
+	return &SQS{
+		svc:    svc,
+		url:    *url,
+		msgC:   make(chan sqs.Message),
+		closeC: make(chan bool),
+	}
+}
+
+func (s *SQS) consume() {
+	result, err := s.svc.ReceiveMessage(&sqs.ReceiveMessageInput{
+		QueueUrl:            aws.String(s.url),
+		MaxNumberOfMessages: aws.Int64(1), // receive 1 message per time, for test purpose?
+		WaitTimeSeconds:     aws.Int64(1), // we notify SQS that we wait 1 minute at most
+	})
+
+	if err != nil {
+		log.Printf("An error occurred while consuming message, error: %s", err)
+		return
+	}
+
+	if len(result.Messages) == 0 {
+		return
+	}
+
+	// We successfully got a message, let's put it into the msgC channel
+	msg := result.Messages[0]
+	s.msgC <- *msg
+}
+
+func (s *SQS) Consume() {
+	go func() {
+		for {
+			select {
+			case <-s.closeC:
+				close(s.msgC)
+				log.Println("close")
+				return
+			default:
+				log.Println("continue receive msg")
+				s.consume()
+			}
+		}
+	}()
+
+	//for _ := range s.closeC {
+	//	close(s.msgC)
+	//}
+
+	for {
+		select {
+		case msg := <-s.msgC:
+			log.Printf("consume %s", *msg.Body)
+		default:
+			time.Sleep(1)
+		}
+	}
+}
+
+func (s *SQS) Close() {
+	s.closeC <- true
+}
+
 func main() {
 	log.Println("Start testing...")
 	svc := newServiceClient()
 	log.Printf("New service created: %v", svc.ServiceID)
 
-	go func(svc *sqs.SQS) {
-		consumeMessage(svc)
-	}(svc)
+	//go func(svc *sqs.SQS) {
+	//	consumeMessage(svc)
+	//}(svc)
 
 	//listQueues(svc)
 	//createQueue(svc)
 	//getQueueUrl(svc)
 	//sendMessage(svc)
 	//runtime.Gosched()
-	for {
-		time.Sleep(1)
-	}
+	//for {
+	//	time.Sleep(1)
+	//}
+
+	mySQS := NewSQS("godos-test")
+	go mySQS.Consume()
+
+	time.Sleep(20 * time.Second)
+	mySQS.Close()
 }
