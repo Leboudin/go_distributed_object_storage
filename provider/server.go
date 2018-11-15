@@ -3,6 +3,8 @@ package provider
 import (
 	"os"
 	"log"
+	"net/http"
+	"github.com/julienschmidt/httprouter"
 )
 
 type DataProviderServer struct {
@@ -36,11 +38,12 @@ func initStorage(storage string) error {
 	}
 }
 
+// Initialize storage and return DataProviderServer instance
 func NewServer(addr string, storage string) *DataProviderServer {
 	err := initStorage(storage)
 	if err != nil {
 		log.Printf("Unable to initialize storage %s, error: %s", storage, err)
-		log.Fatal("Data provider server " + addr + "exiting...")
+		log.Fatal("Data provider server " + addr + " exiting...")
 	}
 
 	return &DataProviderServer{
@@ -48,4 +51,25 @@ func NewServer(addr string, storage string) *DataProviderServer {
 		addr:    addr,
 		storage: storage,
 	}
+}
+
+// Get object name by storage and name
+func (s *DataProviderServer) getObjectName(name string) string {
+	return s.storage + "/objects/" + name
+}
+
+// RESTful API, get object by name
+func (s *DataProviderServer) GetObject(w http.ResponseWriter, r *http.Request, p httprouter.Params) {
+	name := p.ByName("name")
+	log.Printf("Getting object by name: %s", name)
+	objName := s.getObjectName(name)
+	GetObjectByName(objName, w)
+}
+
+// RESTful API, put object by name
+// First we will choose a data server randomly, then we PUT file to the chosen server
+func (s *DataProviderServer) PutObject(w http.ResponseWriter, r *http.Request, p httprouter.Params) {
+	name := p.ByName("name")
+	objName := s.getObjectName(name)
+	PutObjectByName(objName, w, r)
 }
