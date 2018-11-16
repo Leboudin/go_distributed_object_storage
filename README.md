@@ -4,6 +4,16 @@ Demo: Distributed object storage using AWS SQS service as middleware and AWS Dyn
 
 ## Usage:
 
+### Prerequisites
+
+- AWS IAM access key (id and secret)
+- Two AWS SQS standard queues, named `godos-test` and `godos-test-located`
+- Permissions to access the above queues, including:
+    - create message
+    - get queue url
+    - delete message
+    - receive message
+
 ### Quick start
 
 This demo contains two parts: __API server__ and __data server__. API server provides user the ability to access objects through RESTful API,
@@ -52,8 +62,14 @@ help message:
 ```
 -address string
         The server will listen on this address (default ":8030")
-  -dps string
+-dps string
         The comma separated ip address of data provider servers, e.g. "localhost:8030,localhost:8031"
-  -storage string
+-storage string
         The storage path will be used to store files (default "/data")
 ```
+
+### Overview
+
+GET request:
+
+![get_request](https://raw.githubusercontent.com/Leboudin/go_distributed_object_storage/master/resources/godos.001.jpeg)
