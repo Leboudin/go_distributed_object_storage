@@ -1,23 +1,24 @@
 package api
 
 import (
-	"net/http"
-	"github.com/julienschmidt/httprouter"
+	"../sqs"
+	"../streams"
 	"encoding/json"
+	"errors"
+	"github.com/julienschmidt/httprouter"
+	uuid2 "github.com/satori/go.uuid"
+	"io"
 	"log"
 	"math/rand"
-	uuid2 "github.com/satori/go.uuid"
+	"net/http"
 	"sync"
-	"errors"
-
-	"../streams"
-	"io"
+	"time"
 )
 
 type Status int64
 
 const (
-	PENDING  Status = iota
+	PENDING Status = iota
 	RUNNING
 	STOPPING
 )
@@ -29,6 +30,9 @@ type Server struct {
 
 	// API server status
 	status Status
+
+	// SQS
+	sqs sqs.SQS
 
 	// Data provider serve details
 	dp map[string]DataProvider
@@ -64,6 +68,7 @@ func NewServer(dp []string) *Server {
 		version: int64(1),
 		status:  RUNNING,
 		dp:      dps,
+		sqs:     *sqs.NewSQS(),
 	}
 }
 
@@ -111,24 +116,57 @@ func (s *Server) selectDataProvider() (DataProvider, error) {
 // Get object from data provider server
 func (s *Server) GetObject(w http.ResponseWriter, r *http.Request, p httprouter.Params) {
 	name := p.ByName("name")
-	dataSrv, err := s.selectDataProvider()
+	uuid := uuid2.Must(uuid2.NewV4()).String()
+	msg := map[string]string{
+		"name": name,
+		"uid":  uuid,
+	}
+
+	locateSQS := sqs.NewSQSFromUrl(s.sqs.Url, s.sqs.ReplyUrl)
+	_, err := locateSQS.SendMessage(msg, s.sqs.Url)
 	if err != nil {
-		log.Printf("Unable to select data server, error: %s", err)
-		w.WriteHeader(http.StatusServiceUnavailable)
+		log.Printf("Unable to send location query message, error: %s", err)
+		w.WriteHeader(http.StatusInternalServerError)
 		return
 	}
 
-	objNameWithAddr := dataSrv.addr + "/objects/" + name
-	getStream, err := streams.NewGetStream(objNameWithAddr)
-	if err != nil {
-		log.Printf("Failed to get object %s, error: %s", objNameWithAddr, err)
-		w.WriteHeader(http.StatusNotFound)
-		return
+	c := locateSQS.Consume(s.sqs.ReplyUrl)
+	go func() {
+		// If not found in 100 ms, return 404
+		time.Sleep(20 * time.Second)
+		locateSQS.Close()
+	}()
+
+	for r := range c {
+		log.Printf("Consume message %s", *r.Body)
+		req := make(map[string]string)
+		err := json.Unmarshal([]byte(*r.Body), &req)
+		if err != nil {
+			log.Printf("Failed to unmarshal string to JSON, error: %s", err)
+			continue
+		}
+
+		log.Println(req["name"])
+		log.Println(req["uid"])
+		if req["name"] == name && req["uid"] == uuid {
+			// object successfully located
+			objNameWithAddr := req["addr"] + "/objects/" + name
+			getStream, err := streams.NewGetStream(objNameWithAddr)
+			if err != nil {
+				log.Printf("Failed to get object %s, error: %s", objNameWithAddr, err)
+				w.WriteHeader(http.StatusNotFound)
+				return
+			}
+
+			io.Copy(w, getStream)
+			log.Printf("Successfully get object from %s (%s)", name, req["addr"])
+			return
+		}
 	}
 
-	io.Copy(w, getStream)
-	log.Printf("Successfully get object %s from %s (%s)", name, dataSrv.id, dataSrv.addr)
-
+	log.Printf("Query object %s location timeout", name)
+	// TODO: delete message
+	w.WriteHeader(http.StatusNotFound)
 }
 
 // Put object to data provider server

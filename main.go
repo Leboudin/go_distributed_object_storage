@@ -1,9 +1,9 @@
 package main
 
 import (
-	"log"
 	"flag"
 	"github.com/julienschmidt/httprouter"
+	"log"
 	"net/http"
 
 	"./api"
@@ -51,6 +51,11 @@ func startDataServer(addr string, storage string) {
 
 	// We initialize the data server with addr and storage
 	dataSrv := provider.NewServer(addr, storage)
+
+	// Listen to the object location query queue
+	go func() {
+		dataSrv.ListenToObjectLocateQueue()
+	}()
 
 	// Routers
 	router := httprouter.New()

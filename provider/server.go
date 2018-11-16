@@ -1,10 +1,13 @@
 package provider
 
 import (
-	"os"
+	"encoding/json"
+	"github.com/julienschmidt/httprouter"
 	"log"
 	"net/http"
-	"github.com/julienschmidt/httprouter"
+	"os"
+
+	"../sqs"
 )
 
 type DataProviderServer struct {
@@ -72,4 +75,63 @@ func (s *DataProviderServer) PutObject(w http.ResponseWriter, r *http.Request, p
 	name := p.ByName("name")
 	objName := s.getObjectName(name)
 	PutObjectByName(objName, w, r)
+}
+
+// Listens to object location query queue, consume messages from API server,
+// the message looks like:
+// 		{"name": "someobject", "uid": <UUID>}
+// the data provider server will try to find the object in its storage path,
+// if found, data provider server will send a message to "godos-test-located" queue,
+//		{"uid": <UUID>, "addr": "localhost:8031", "name": "someobject"}
+// 		(the uid is used to determine which request by API server)
+// then deletes the message from object location query queue, to prevent it being consumed again
+// if not found, ignore it
+func (s *DataProviderServer) ListenToObjectLocateQueue() {
+	locateSQS := sqs.NewSQS()
+	defer locateSQS.Close()
+
+	c := locateSQS.Consume(locateSQS.Url)
+	for r := range c {
+		log.Printf("Consume message %s", *r.Body)
+		req := make(map[string]string)
+		err := json.Unmarshal([]byte(*r.Body), &req)
+		if err != nil {
+			log.Printf("Failed to unmarshal string to JSON, error: %s", err)
+			continue
+		}
+
+		log.Printf("Trying to located object %s, request UID: %s", req["name"], req["uid"])
+		if s.isObjectExists(req["name"]) {
+			log.Printf("Object %s found", req["name"])
+			// delete the message
+			go func() {
+				err := locateSQS.DeleteMessage(r, locateSQS.Url)
+				if err != nil {
+					log.Printf("Failed to delete message %s, error: %s", *r.ReceiptHandle, err)
+				}
+			}()
+
+			// send reply to godos-test-located queue
+			go func() {
+				msg := map[string]string{
+					"name": req["name"],
+					"uid":  req["uid"],
+					"addr": s.addr,
+				}
+
+				_, err := locateSQS.SendMessage(msg, locateSQS.ReplyUrl)
+				if err != nil {
+					log.Printf("Failed to send reply message, error: %s", err)
+				}
+			}()
+		} else {
+			log.Printf("Object %s not found", req["name"])
+		}
+	}
+}
+
+// Determines if object exists
+func (s *DataProviderServer) isObjectExists(name string) bool {
+	_, err := os.Stat(s.storage + "/objects/" + name)
+	return !os.IsNotExist(err)
 }
